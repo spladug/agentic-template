@@ -1,5 +1,5 @@
 {
-  "name": "Sandbox",
+  "name": "MyProject Sandbox",
   "build": {
     "dockerfile": "Dockerfile",
     "args": {
@@ -9,6 +9,9 @@
   "runArgs": [
     "--cap-add=NET_ADMIN",
     "--cap-add=NET_RAW"
+  ],
+  "mounts": [
+    "source=cursor-home-${devcontainerId},target=/home/vscode/.cursor,type=volume"
   ],
   "customizations": {
     "vscode": {
