@@ -1,25 +1,52 @@
 FROM mcr.microsoft.com/devcontainers/base:debian
 
-ARG TZ
-ENV TZ="$TZ"
+ARG DEBIAN_FRONTEND=noninteractive
 
-# Install firewall tools
-RUN apt-get update && apt-get install -y --no-install-recommends \
-  fzf \
-  iptables \
-  ipset \
-  iproute2 \
-  dnsutils \
-  aggregate \
-  && apt-get clean && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
 
-# Set `DEVCONTAINER` environment variable to help with orientation
-ENV DEVCONTAINER=true
+# Claude code repo
+COPY ./claude-code.asc /etc/apt/keyrings/claude-code.asc
+COPY ./claude-code.list /etc/apt/sources.list.d/claude-code.list
 
-# Copy and set up firewall script
-COPY init-firewall.sh /usr/local/bin/
-USER root
-RUN chmod +x /usr/local/bin/init-firewall.sh && \
-  echo "vscode ALL=(root) NOPASSWD: /usr/local/bin/init-firewall.sh" > /etc/sudoers.d/vscode && \
-  chmod 0440 /etc/sudoers.d/vscode
+# Base tools
+RUN <<EOF
+apt-get update
+apt-get install -y --no-install-recommends \
+    awscli \
+    bat \
+    claude-code \
+    curl \
+    eza \
+    fzf \
+    gh \
+    git \
+    git-delta \
+    gpg \
+    jq \
+    less \
+    make \
+    man-db \
+    ripgrep \
+    shellcheck \
+    sudo \
+    unzip \
+    vim \
+    wget \
+    yamllint \
+    yq \
+    zsh \
+    ;
+apt-get clean
+rm -rf /var/lib/apt/lists/*
+
+chsh -s /bin/zsh vscode
+
+# Persist ~/.claude.json across rebuilds by redirecting it into the claude-home
+# volume (which is mounted at /home/vscode/.claude in devcontainer.json).
+ln -s /home/vscode/.claude/.claude.json /home/vscode/.claude.json
+EOF
+
 USER vscode
+
+ENV DEVCONTAINER=true
+ENV EDITOR=vim VISUAL=vim

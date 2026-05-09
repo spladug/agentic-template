@@ -11,26 +11,12 @@
     "--cap-add=NET_RAW"
   ],
   "mounts": [
-    "source=cursor-home-${devcontainerId},target=/home/vscode/.cursor,type=volume"
+    "source=${devcontainerId}-claude-home,target=/home/vscode/.claude,type=volume",
+    "source=${devcontainerId}-zsh,target=/home/vscode/.zsh-history,type=volume"
   ],
-  "customizations": {
-    "vscode": {
-      "settings": {
-        "terminal.integrated.defaultProfile.linux": "zsh",
-        "terminal.integrated.profiles.linux": {
-          "zsh": {
-            "path": "zsh"
-          }
-        }
-      }
-    }
-  },
   "features": {
-    // https://containers.dev/features"
+    // https://containers.dev/features
   },
   "remoteUser": "vscode",
-  "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=delegated",
-  "workspaceFolder": "/workspace",
-  "postStartCommand": "sudo /usr/local/bin/init-firewall.sh",
-  "waitFor": "postStartCommand"
+  "workspaceFolder": "/workspace"
 }
