@@ -9,6 +9,14 @@
       "ZSH_IN_DOCKER_VERSION": "1.2.0"
     }
   },
+  // Uncomment the features this project needs. They install at build time,
+  // so they work with the runtime firewall.
+  "features": {
+    // Headless Chromium + agent-browser CLI so agents can drive a browser.
+    // "./features/agent-browser": {},
+    // "ghcr.io/devcontainers/features/python:1": { "version": "3.12" },
+    // "ghcr.io/devcontainers/features/node:1": { "version": "lts" }
+  },
   "runArgs": [
     "--cap-add=NET_ADMIN",
     "--cap-add=NET_RAW"

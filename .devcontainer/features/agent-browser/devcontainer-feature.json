@@ -1,0 +1,17 @@
+{
+  "id": "agent-browser",
+  "version": "1.0.0",
+  "name": "agent-browser",
+  "description": "Headless Chromium plus the agent-browser CLI, fully installed at build time so the runtime firewall doesn't need to allow any browser downloads.",
+  "options": {
+    "version": {
+      "type": "string",
+      "default": "latest",
+      "description": "agent-browser npm version to install."
+    }
+  },
+  "containerEnv": {
+    "AGENT_BROWSER_EXECUTABLE_PATH": "/usr/bin/chromium",
+    "AGENT_BROWSER_ARGS": "--no-sandbox,--disable-dev-shm-usage,--use-angle=swiftshader,--enable-unsafe-swiftshader,--ignore-gpu-blocklist"
+  }
+}
