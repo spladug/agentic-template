@@ -12,7 +12,12 @@ iptables -t nat -F
 iptables -t nat -X
 iptables -t mangle -F
 iptables -t mangle -X
+ip6tables -F
+ip6tables -X
+ip6tables -t mangle -F
+ip6tables -t mangle -X
 ipset destroy allowed-domains 2>/dev/null || true
+ipset destroy allowed-domains-v6 2>/dev/null || true
 
 # 2. Selectively restore ONLY internal Docker DNS resolution
 if [ -n "$DOCKER_DNS_RULES" ]; then
@@ -27,18 +32,33 @@ fi
 # First allow DNS and localhost before any restrictions
 # Allow outbound DNS
 iptables -A OUTPUT -p udp --dport 53 -j ACCEPT
+ip6tables -A OUTPUT -p udp --dport 53 -j ACCEPT
 # Allow inbound DNS responses
 iptables -A INPUT -p udp --sport 53 -j ACCEPT
+ip6tables -A INPUT -p udp --sport 53 -j ACCEPT
 # Allow outbound SSH
 iptables -A OUTPUT -p tcp --dport 22 -j ACCEPT
+ip6tables -A OUTPUT -p tcp --dport 22 -j ACCEPT
 # Allow inbound SSH responses
 iptables -A INPUT -p tcp --sport 22 -m state --state ESTABLISHED -j ACCEPT
+ip6tables -A INPUT -p tcp --sport 22 -m state --state ESTABLISHED -j ACCEPT
 # Allow localhost
 iptables -A INPUT -i lo -j ACCEPT
 iptables -A OUTPUT -o lo -j ACCEPT
+ip6tables -A INPUT -i lo -j ACCEPT
+ip6tables -A OUTPUT -o lo -j ACCEPT
 
-# Create ipset with CIDR support
-ipset create allowed-domains hash:net
+# IPv6 requires ICMPv6 (NDP/RA/PMTU) or the stack breaks entirely
+ip6tables -A INPUT -p ipv6-icmp -j ACCEPT
+ip6tables -A OUTPUT -p ipv6-icmp -j ACCEPT
+# Link-local + multicast are needed for neighbour discovery
+ip6tables -A INPUT -s fe80::/10 -j ACCEPT
+ip6tables -A OUTPUT -d fe80::/10 -j ACCEPT
+ip6tables -A OUTPUT -d ff00::/8 -j ACCEPT
+
+# Create ipsets with CIDR support (one per address family)
+ipset create allowed-domains hash:net family inet
+ipset create allowed-domains-v6 hash:net family inet6
 
 # Fetch GitHub meta information and aggregate + add their IP ranges
 echo "Fetching GitHub IP ranges..."
@@ -53,7 +73,9 @@ if ! echo "$gh_ranges" | jq -e '.web and .api and .git' >/dev/null; then
     exit 1
 fi
 
-echo "Processing GitHub IPs..."
+echo "Processing GitHub IPv4 ranges..."
+# NOTE: `aggregate` is IPv4-only and silently drops IPv6 CIDRs, so split by
+# family FIRST and only feed the v4 half through it.
 while read -r cidr; do
     if [[ ! "$cidr" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}/[0-9]{1,2}$ ]]; then
         echo "ERROR: Invalid CIDR range from GitHub meta: $cidr"
@@ -61,7 +83,17 @@ while read -r cidr; do
     fi
     echo "Adding GitHub range $cidr"
     ipset add allowed-domains "$cidr"
-done < <(echo "$gh_ranges" | jq -r '(.web + .api + .git)[]' | aggregate -q)
+done < <(echo "$gh_ranges" | jq -r '(.web + .api + .git)[] | select(test(":") | not)' | aggregate -q)
+
+echo "Processing GitHub IPv6 ranges..."
+while read -r cidr; do
+    if [[ ! "$cidr" =~ ^[0-9a-fA-F:]+/[0-9]{1,3}$ ]]; then
+        echo "ERROR: Invalid IPv6 CIDR range from GitHub meta: $cidr"
+        exit 1
+    fi
+    echo "Adding GitHub range $cidr"
+    ipset add -exist allowed-domains-v6 "$cidr"
+done < <(echo "$gh_ranges" | jq -r '(.web + .api + .git)[] | select(test(":"))' | sort -u)
 
 # Resolve and add other allowed domains
 for domain in \
@@ -78,7 +110,7 @@ for domain in \
         echo "ERROR: Failed to resolve $domain"
         exit 1
     fi
-    
+
     while read -r ip; do
         if [[ ! "$ip" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
             echo "ERROR: Invalid IP from DNS for $domain: $ip"
@@ -87,6 +119,22 @@ for domain in \
         echo "Adding $ip for $domain"
         ipset add allowed-domains "$ip"
     done < <(echo "$ips")
+
+    # AAAA is optional: several of these domains are IPv4-only today, and a
+    # missing AAAA must not fail the run.
+    ips6=$(dig +noall +answer AAAA "$domain" | awk '$4 == "AAAA" {print $5}')
+    if [ -z "$ips6" ]; then
+        echo "No AAAA record for $domain (IPv4-only)"
+    else
+        while read -r ip; do
+            if [[ ! "$ip" =~ ^[0-9a-fA-F:]+$ ]]; then
+                echo "ERROR: Invalid IPv6 from DNS for $domain: $ip"
+                exit 1
+            fi
+            echo "Adding $ip for $domain"
+            ipset add -exist allowed-domains-v6 "$ip"
+        done < <(echo "$ips6")
+    fi
 done
 
 # Get host IP from default route
@@ -107,24 +155,39 @@ iptables -A OUTPUT -d "$HOST_NETWORK" -j ACCEPT
 iptables -P INPUT DROP
 iptables -P FORWARD DROP
 iptables -P OUTPUT DROP
+ip6tables -P INPUT DROP
+ip6tables -P FORWARD DROP
+ip6tables -P OUTPUT DROP
 
 # First allow established connections for already approved traffic
 iptables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
 iptables -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+ip6tables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+ip6tables -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
 
 # Then allow only specific outbound traffic to allowed domains
 iptables -A OUTPUT -m set --match-set allowed-domains dst -j ACCEPT
+ip6tables -A OUTPUT -m set --match-set allowed-domains-v6 dst -j ACCEPT
 
 # Explicitly REJECT all other outbound traffic for immediate feedback
 iptables -A OUTPUT -j REJECT --reject-with icmp-admin-prohibited
+ip6tables -A OUTPUT -j REJECT --reject-with icmp6-adm-prohibited
 
 echo "Firewall configuration complete"
 echo "Verifying firewall rules..."
-if curl --connect-timeout 5 https://example.com >/dev/null 2>&1; then
-    echo "ERROR: Firewall verification failed - was able to reach https://example.com"
+# Check BOTH families explicitly -- a bare curl picks one and can mask the other.
+if curl -4 --connect-timeout 5 https://example.com >/dev/null 2>&1; then
+    echo "ERROR: Firewall verification failed - was able to reach https://example.com over IPv4"
     exit 1
 else
-    echo "Firewall verification passed - unable to reach https://example.com as expected"
+    echo "Firewall verification passed - unable to reach https://example.com over IPv4 as expected"
+fi
+
+if curl -6 --connect-timeout 5 https://example.com >/dev/null 2>&1; then
+    echo "ERROR: Firewall verification failed - was able to reach https://example.com over IPv6"
+    exit 1
+else
+    echo "Firewall verification passed - unable to reach https://example.com over IPv6 as expected"
 fi
 
 # Verify GitHub API access
